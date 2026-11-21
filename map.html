@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="interfaceOverlay">
+    <select id="mapSelector"></select>
+
+    <div id="guessResult">
+      <div><span>Distance</span> <strong id="displayDistance">0</strong></div>
+      <div><span>Points</span> <strong id="displayPoints">0</strong></div>
+    </div>
+  </div>
+
+  <div id="spotPanel" hidden>
+    <img id="spotImage" alt="Current spot">
+    <button id="btnGuess" disabled>Guess</button>
+  </div>
+
+  <div id="spotViewer" hidden>
+    <img id="spotViewerImage" alt="Expanded spot">
+  </div>
+
+  <canvas id="canvasViewport"></canvas>
+  <canvas id="markerOverlay"></canvas>
+
+  <script type="module" src="./app.js"></script>
+  <script type="module" src="./assets/originalPath.js"></script>
+</body>
+</html>

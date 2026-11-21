@@ -1,0 +1,1 @@
+fix colors cutting out parts in multiple maps
