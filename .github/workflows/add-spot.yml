@@ -1,0 +1,54 @@
+name: Add Spot from Issue
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  add-spot:
+    if: github.event.label.name == 'approved'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r assets/requirements.txt
+
+      - name: Process Issue & Add Spot
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python assets/addSpot.py
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          SPOT_LOC=$(jq -r '.spotLocation' assets/genshin_spots/index.json)
+          git add -f assets/genshin_spots/index.json "assets/genshin_spots/$SPOT_LOC"
+
+          if ! git diff --staged --quiet; then
+            git commit -m "Add spot from issue #${{ github.event.issue.number }} [skip ci]"
+            git push origin HEAD
+          fi
+
+      - name: Close Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          gh issue close "$ISSUE_NUM" --comment "Spot has been added! Thanks for contributing."

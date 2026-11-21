@@ -1,27 +1,16 @@
 export class Spot {
-  constructor(spotEntry, imageLocation) {
-    this.id     = Number(spotEntry.id)
-    this.mapId  = Number(spotEntry.mapId)
-    this.coords = {
-      x: Number(spotEntry.coords.x),
-      y: Number(spotEntry.coords.y),
-    }
+  constructor(entry, imageLocation) {
+    this.id     = Number(entry.id)
+    this.mapId  = Number(entry.mapId)
+    this.coords = { x: Number(entry.coords.x), y: Number(entry.coords.y) }
     this.image  = imageLocation
   }
 
   checkGuess(x, y) {
-    const guessX = Number(x)
-    const guessY = Number(y)
-
-    if (!Number.isFinite(guessX) || !Number.isFinite(guessY)) {
-      throw new TypeError('Spot.checkGuess expects numeric x and y values')
-    }
-
-    const distance = Math.hypot(this.coords.x - guessX, this.coords.y - guessY)
-
+    const distance = Math.hypot(this.coords.x - Number(x), this.coords.y - Number(y))
     return {
-      exact: distance === 0,
-      distance,
+      exact:              distance === 0,
+      distance:           distance,
       correctCoordinates: { ...this.coords },
     }
   }
@@ -31,74 +20,37 @@ export class SpotLoader {
   constructor(indexLocationPath) {
     this.indexLocationPath = indexLocationPath
     this.spotLocation      = null
-    this.loadedStatus      = false
+    this.isLoaded          = false
     this.spotsCollection   = []
     this.spotsById         = new Map()
   }
 
-  get isLoaded() {
-    return this.loadedStatus
-  }
+  get allSpots()   { return this.spotsCollection }
+  get totalSpots() { return this.spotsCollection.length }
 
-  get allSpots() {
-    return [...this.spotsCollection]
-  }
-
-  get totalSpots() {
-    return this.spotsCollection.length
-  }
-
-  getSpotById(targetId) {
-    return this.spotsById.get(Number(targetId)) ?? null
-  }
-
-  getSpotsByMapId(targetMapId) {
-    return this.spotsCollection.filter((spot) => spot.mapId === Number(targetMapId))
-  }
+  getSpotById(id)        { return this.spotsById.get(Number(id)) ?? null }
+  getSpotsByMapId(mapId) { return this.spotsCollection.filter((s) => s.mapId === Number(mapId)) }
 
   getRandomSpot(targetMapId = null) {
-    const availableSpots = targetMapId === null
-      ? this.spotsCollection
-      : this.getSpotsByMapId(targetMapId)
-
-    if (availableSpots.length === 0) {
-      return null
-    }
-
-    const randomIndex = Math.floor(Math.random() * availableSpots.length)
-    return availableSpots[randomIndex]
+    const pool = targetMapId === null ? this.spotsCollection : this.getSpotsByMapId(targetMapId)
+    return pool.length === 0 ? null : pool[Math.floor(Math.random() * pool.length)]
   }
 
   async load() {
-    const absoluteIndexLocation = new URL(this.indexLocationPath, window.location.href)
-    const indexResponse         = await fetch(absoluteIndexLocation.href)
+    const indexUrl = new URL(this.indexLocationPath, window.location.href)
+    const response = await fetch(indexUrl.href)
+    if (!response.ok) throw new Error(`[SpotLoader] Failed fetching index: ${response.statusText}`)
 
-    if (!indexResponse.ok) {
-      throw new Error(`[SpotLoader] Failed fetching index: ${indexResponse.statusText}`)
-    }
+    const payload     = await response.json()
+    this.spotLocation = new URL(`${payload.spotLocation.replace(/\/$/, '')}/`, new URL('.', indexUrl)).href
 
-    const indexPayload   = await indexResponse.json()
-    const indexDirectory = new URL('.', absoluteIndexLocation)
-
-    this.spotLocation = new URL(
-      `${indexPayload.spotLocation.replace(/\/$/, '')}/`,
-      indexDirectory
-    ).href
-
-    const loadedSpots = (indexPayload.spots ?? []).map((spotEntry) => {
-      const imageLocation = new URL(`${spotEntry.id}.png`, this.spotLocation).href
-      return new Spot(spotEntry, imageLocation)
+    this.spotsCollection = (payload.spots ?? []).map((entry) => {
+      const spot = new Spot(entry, new URL(`${entry.id}.png`, this.spotLocation).href)
+      this.spotsById.set(spot.id, spot)
+      return spot
     })
 
-    this.spotsCollection.length = 0
-    this.spotsById.clear()
-
-    for (const spot of loadedSpots) {
-      this.spotsCollection.push(spot)
-      this.spotsById.set(spot.id, spot)
-    }
-
-    this.loadedStatus = true
+    this.isLoaded = true
     return this
   }
 }

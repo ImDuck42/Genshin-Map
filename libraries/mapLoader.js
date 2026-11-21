@@ -1,83 +1,27 @@
 export class GenshinMap {
-  constructor(mapConfiguration) {
-    this.mapIdentifier          = mapConfiguration.mapIdentifier
-    this.mapName                = mapConfiguration.mapName
-    this.resolutionTier         = mapConfiguration.resolutionTier
-    this.folderName             = mapConfiguration.folderName
-    this.tileSizePixels         = mapConfiguration.tileSizePixels
-    this.totalColumns           = mapConfiguration.totalColumns
-    this.totalRows              = mapConfiguration.totalRows
-    this.totalWidthPixels       = mapConfiguration.totalWidthPixels
-    this.totalHeightPixels      = mapConfiguration.totalHeightPixels
-    this.namingPattern          = mapConfiguration.namingPattern
-    this.indexingScheme         = mapConfiguration.indexingScheme
-    this.metadataLocation       = mapConfiguration.metadataLocation
-    this.tileFolderLocation     = mapConfiguration.tileFolderLocation
-    this.omittedTilesCollection = new Set(mapConfiguration.omittedTilesCollection ?? [])
+  constructor(config) {
+    this.identifier        = Number(config.mapId)
+    this.name              = config.name
+    this.resolution        = config.resolution
+    this.folder            = config.folderName
+    this.tileSize          = config.tileSize
+    this.columns           = config.totalColumns
+    this.rows              = config.totalRows
+    this.width             = config.totalWidth
+    this.height            = config.totalHeight
+    this.totalTiles        = config.totalColumns * config.totalRows
+    this.naming            = config.naming
+    this.indexing          = config.indexing
+    this.metadata          = config.metadataLocation
+    this.tileBaseDirectory = config.tileFolderLocation
+    this.omittedTiles      = new Set(config.omittedTiles ?? [])
   }
 
-  get identifier() {
-    return this.mapIdentifier
-  }
-
-  get name() {
-    return this.mapName
-  }
-
-  get resolution() {
-    return this.resolutionTier
-  }
-
-  get folder() {
-    return this.folderName
-  }
-
-  get tileSize() {
-    return this.tileSizePixels
-  }
-
-  get columns() {
-    return this.totalColumns
-  }
-
-  get rows() {
-    return this.totalRows
-  }
-
-  get width() {
-    return this.totalWidthPixels
-  }
-
-  get height() {
-    return this.totalHeightPixels
-  }
-
-  get totalTiles() {
-    return this.totalColumns * this.totalRows
-  }
-
-  get omittedTilesCount() {
-    return this.omittedTilesCollection.size
-  }
-
-  get aspectRatio() {
-    return this.totalWidthPixels / this.totalHeightPixels
-  }
-
-  get indexing() {
-    return this.indexingScheme
-  }
-
-  get metadata() {
-    return this.metadataLocation
-  }
-
-  get tileBaseDirectory() {
-    return this.tileFolderLocation
-  }
+  get omittedTilesCount() { return this.omittedTiles.size }
+  get aspectRatio()       { return this.width / this.height }
 
   isTileOmitted(columnCoordinate, rowCoordinate) {
-    return this.omittedTilesCollection.has(`${columnCoordinate}x${rowCoordinate}`)
+    return this.omittedTiles.has(`${columnCoordinate}x${rowCoordinate}`)
   }
 
   hasTile(columnCoordinate, rowCoordinate) {
@@ -85,19 +29,19 @@ export class GenshinMap {
   }
 
   getTileLocation(columnCoordinate, rowCoordinate) {
-    const targetColumn = this.indexingScheme === '1-based'
-      ? Math.max(1, Math.min(columnCoordinate, this.totalColumns))
+    const targetColumn = this.indexing === '1-based'
+      ? Math.max(1, Math.min(columnCoordinate, this.columns))
       : columnCoordinate
 
-    const targetRow = this.indexingScheme === '1-based'
-      ? Math.max(1, Math.min(rowCoordinate, this.totalRows))
+    const targetRow = this.indexing === '1-based'
+      ? Math.max(1, Math.min(rowCoordinate, this.rows))
       : rowCoordinate
 
-    const fileName = this.namingPattern
-      .replaceAll('{column}', targetColumn)
-      .replaceAll('{row}',    targetRow)
+    const fileName = this.naming
+      .replace('{column}', targetColumn)
+      .replace('{row}',    targetRow)
 
-    return `${this.tileFolderLocation}/${fileName}`
+    return `${this.tileBaseDirectory}/${fileName}`
   }
 }
 
@@ -108,32 +52,15 @@ export class MapLoader {
     this.mapsCollection    = []
     this.mapsByIdentifier  = new Map()
     this.mapsByName        = new Map()
-    this.dynamicAccessors  = new Set()
+    this.dynamicKeys       = new Set()
   }
 
-  get isLoaded() {
-    return this.loadedStatus
-  }
-
-  get allMaps() {
-    return [...this.mapsCollection]
-  }
-
-  get totalMaps() {
-    return this.mapsCollection.length
-  }
-
-  get mapIdentifiers() {
-    return this.mapsCollection.map((mapInstance) => mapInstance.identifier)
-  }
-
-  get mapNames() {
-    return this.mapsCollection.map((mapInstance) => mapInstance.name)
-  }
-
-  get defaultMap() {
-    return this.mapsCollection[0] ?? null
-  }
+  get isLoaded()       { return this.loadedStatus }
+  get allMaps()        { return this.mapsCollection }
+  get totalMaps()      { return this.mapsCollection.length }
+  get mapIdentifiers() { return this.mapsCollection.map((map) => map.identifier) }
+  get mapNames()       { return this.mapsCollection.map((map) => map.name) }
+  get defaultMap()     { return this.mapsCollection[0] ?? null }
 
   getMapByIdentifier(targetIdentifier) {
     return this.mapsByIdentifier.get(Number(targetIdentifier)) ?? null
@@ -143,50 +70,22 @@ export class MapLoader {
     return this.mapsByName.get(targetName) ?? null
   }
 
-  registerAccessor(accessorKey, mapInstance) {
-    if (accessorKey in this && !this.dynamicAccessors.has(accessorKey)) {
-      console.warn(`[MapLoader] Skipping accessor "${accessorKey}": name already in use`)
-      return
-    }
-
-    Object.defineProperty(this, accessorKey, {
-      get:          () => mapInstance,
-      enumerable:   true,
-      configurable: true,
-    })
-
-    this.dynamicAccessors.add(accessorKey)
-  }
-
   async fetchMap(mapEntry, absoluteIndexLocation) {
-    const absoluteMetadataLocation = new URL(mapEntry.metadata, absoluteIndexLocation).href
-    const metadataResponse         = await fetch(absoluteMetadataLocation)
+    const metadataLocation = new URL(mapEntry.metadata, absoluteIndexLocation).href
+    const metadataResponse = await fetch(metadataLocation)
 
     if (!metadataResponse.ok) {
       return null
     }
 
     const metadataPayload    = await metadataResponse.json()
-    const tileFolderLocation = absoluteMetadataLocation.substring(
-      0,
-      absoluteMetadataLocation.lastIndexOf('/')
-    )
+    const tileFolderLocation = metadataLocation.slice(0, metadataLocation.lastIndexOf('/'))
 
     return new GenshinMap({
-      mapIdentifier:          Number(metadataPayload.mapId),
-      mapName:                metadataPayload.name,
-      resolutionTier:         metadataPayload.resolution,
-      folderName:             mapEntry.folderName,
-      tileSizePixels:         metadataPayload.tileSize,
-      totalColumns:           metadataPayload.totalColumns,
-      totalRows:              metadataPayload.totalRows,
-      totalWidthPixels:       metadataPayload.totalWidth,
-      totalHeightPixels:      metadataPayload.totalHeight,
-      namingPattern:          metadataPayload.naming,
-      indexingScheme:         metadataPayload.indexing,
-      omittedTilesCollection: metadataPayload.omittedTiles ?? [],
-      metadataLocation:       absoluteMetadataLocation,
-      tileFolderLocation:     tileFolderLocation,
+      ...metadataPayload,
+      folderName:         mapEntry.folderName,
+      metadataLocation:   metadataLocation,
+      tileFolderLocation: tileFolderLocation,
     })
   }
 
@@ -205,22 +104,26 @@ export class MapLoader {
       await Promise.all(mapEntries.map((mapEntry) => this.fetchMap(mapEntry, absoluteIndexLocation)))
     ).filter(Boolean)
 
-    this.mapsCollection.length = 0
-    this.mapsByIdentifier.clear()
-    this.mapsByName.clear()
-
-    for (const accessorKey of this.dynamicAccessors) {
-      delete this[accessorKey]
+    for (const key of this.dynamicKeys) {
+      delete this[key]
     }
-    this.dynamicAccessors.clear()
+    this.dynamicKeys.clear()
 
-    for (const mapInstance of loadedMaps) {
-      this.mapsCollection.push(mapInstance)
-      this.mapsByIdentifier.set(mapInstance.identifier, mapInstance)
-      this.mapsByName.set(mapInstance.name, mapInstance)
+    this.mapsCollection   = loadedMaps
+    this.mapsByIdentifier = new Map(loadedMaps.map((map) => [map.identifier, map]))
+    this.mapsByName       = new Map(loadedMaps.map((map) => [map.name, map]))
 
-      this.registerAccessor(mapInstance.folder, mapInstance)
-      this.registerAccessor(`map${mapInstance.identifier}`, mapInstance)
+    for (const map of loadedMaps) {
+      if (map.folder && !(map.folder in this)) {
+        this[map.folder] = map
+        this.dynamicKeys.add(map.folder)
+      }
+
+      const identifierKey = `map${map.identifier}`
+      if (!(identifierKey in this)) {
+        this[identifierKey] = map
+        this.dynamicKeys.add(identifierKey)
+      }
     }
 
     this.loadedStatus = true

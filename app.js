@@ -1,12 +1,12 @@
 import { MapLoader }     from './libraries/mapLoader.js'
-import { SpotLoader }    from './libraries/spotLoader.js'
+import { SpotLoader }    from './libraries/dummy.js' // spotLoader
 import { MapRenderer }   from './libraries/mapRenderer.js'
 import { evaluateGuess } from './libraries/guessScoring.js'
 
 const mapSelectorElement = document.getElementById('mapSelector')
 const displayDistance    = document.getElementById('displayDistance')
 const displayPoints      = document.getElementById('displayPoints')
-const btnGuess           = document.getElementById('btnGuess')
+const guessButton        = document.getElementById('btnGuess')
 const canvasViewport     = document.getElementById('canvasViewport')
 const spotPanel          = document.getElementById('spotPanel')
 const spotImageElement   = document.getElementById('spotImage')
@@ -23,12 +23,12 @@ await Promise.all([
 
 const mapRendererInstance = new MapRenderer('#canvasViewport')
 
-let activeMap         = null
-let currentSpot       = null
-let playerGuessCoords = null
-let solutionCoords    = null
-let totalScore        = 0
-let pointerDownOrigin = null
+let activeMap              = null
+let currentSpot            = null
+let playerGuessCoordinates = null
+let solutionCoordinates    = null
+let totalScore             = 0
+let pointerDownOrigin      = null
 
 function drawMarker(context, coordinates, fillColor, strokeColor, radiusPixels, pixelRatio) {
   context.beginPath()
@@ -53,73 +53,62 @@ const originalRenderMethod = mapRendererInstance.render.bind(mapRendererInstance
 mapRendererInstance.render = () => {
   originalRenderMethod()
 
-  if (!playerGuessCoords || !activeMap) return
+  if (!playerGuessCoordinates || !activeMap) return
+  if (solutionCoordinates && activeMap.identifier !== currentSpot?.mapId) return
 
-  const context    = mapRendererInstance.renderingContext
-  const pixelRatio = mapRendererInstance.pixelRatio
-  const guessPoint = mapRendererInstance.mapToCanvasCoordinates(playerGuessCoords.x, playerGuessCoords.y)
+  const { renderingContext, pixelRatio } = mapRendererInstance
+  const guessPoint                       = mapRendererInstance.mapToCanvasCoordinates(playerGuessCoordinates.x, playerGuessCoordinates.y)
 
-  if (solutionCoords) {
-    const answerPoint = mapRendererInstance.mapToCanvasCoordinates(solutionCoords.x, solutionCoords.y)
-    drawConnectingLine(context, guessPoint, answerPoint, '#f0c674', 3, pixelRatio)
-    drawMarker(context, answerPoint, '#3fb950', '#ffffff', 6, pixelRatio)
+  if (solutionCoordinates) {
+    const answerPoint = mapRendererInstance.mapToCanvasCoordinates(solutionCoordinates.x, solutionCoordinates.y)
+    drawConnectingLine(renderingContext, guessPoint, answerPoint, '#f0c674', 3, pixelRatio)
+    drawMarker(renderingContext, answerPoint, '#3fb950', '#ffffff', 6, pixelRatio)
   }
 
-  drawMarker(context, guessPoint, '#f85149', '#ffffff', 6, pixelRatio)
+  drawMarker(renderingContext, guessPoint, '#f85149', '#ffffff', 6, pixelRatio)
 }
 
-function isValidLandmassClick(clickedLandCoords, screenX, screenY) {
-  if (!clickedLandCoords || !activeMap) return false
+function isValidLandmassClick(clickedLandCoordinates, screenX, screenY) {
+  if (!clickedLandCoordinates || !activeMap) return false
 
   const bounds = mapRendererInstance.landBounds
   if (
-    clickedLandCoords.x < 0 || clickedLandCoords.y < 0 ||
-    clickedLandCoords.x > bounds.width || clickedLandCoords.y > bounds.height
+    clickedLandCoordinates.x < 0            || clickedLandCoordinates.y < 0 ||
+    clickedLandCoordinates.x > bounds.width || clickedLandCoordinates.y > bounds.height
   ) {
     return false
   }
 
-  const tileSize = activeMap.tileSize
-  const column   = Math.floor(clickedLandCoords.rawX / tileSize) + 1
-  const row      = Math.floor(clickedLandCoords.rawY / tileSize) + 1
+  const column = Math.floor(clickedLandCoordinates.rawX / activeMap.tileSize) + 1
+  const row    = Math.floor(clickedLandCoordinates.rawY / activeMap.tileSize) + 1
+  if (activeMap.isTileOmitted(column, row)) return false
 
-  if (activeMap.isTileOmitted(column, row)) {
-    return false
-  }
+  const canvasBoundingBox = canvasViewport.getBoundingClientRect()
+  const canvasPixelX      = Math.floor((screenX - canvasBoundingBox.left) * mapRendererInstance.pixelRatio)
+  const canvasPixelY      = Math.floor((screenY - canvasBoundingBox.top)  * mapRendererInstance.pixelRatio)
 
-  const canvasRect   = canvasViewport.getBoundingClientRect()
-  const canvasPixelX = Math.floor((screenX - canvasRect.left) * mapRendererInstance.pixelRatio)
-  const canvasPixelY = Math.floor((screenY - canvasRect.top)  * mapRendererInstance.pixelRatio)
-
-  if (
-    canvasPixelX < 0 || canvasPixelY < 0 ||
-    canvasPixelX >= canvasViewport.width || canvasPixelY >= canvasViewport.height
-  ) {
+  if (canvasPixelX < 0 || canvasPixelY < 0 || canvasPixelX >= canvasViewport.width || canvasPixelY >= canvasViewport.height) {
     return false
   }
 
   try {
-    const pixelAlpha = mapRendererInstance.renderingContext.getImageData(canvasPixelX, canvasPixelY, 1, 1).data[3]
-    return pixelAlpha > 0
+    return mapRendererInstance.renderingContext.getImageData(canvasPixelX, canvasPixelY, 1, 1).data[3] > 0
   } catch {
     return true
   }
 }
 
 function selectMap(targetMap) {
-  totalScore                  = 0
-  activeMap                   = targetMap
-  currentSpot                 = null
-  playerGuessCoords           = null
-  solutionCoords              = null
-  spotPanel.hidden            = true
-  btnGuess.disabled           = true
-  btnGuess.textContent        = 'Guess'
-  displayDistance.textContent = '0'
-  displayPoints.textContent   = '0'
-  mapSelectorElement.value    = targetMap.identifier
+  if (!targetMap) return
 
-  spotImageElement.removeAttribute('src')
+  activeMap                = targetMap
+  mapSelectorElement.value = targetMap.identifier
+
+  if (!solutionCoordinates) {
+    playerGuessCoordinates = null
+    guessButton.disabled   = true
+  }
+
   mapRendererInstance.displayMap(targetMap)
 }
 
@@ -132,13 +121,13 @@ function selectRandomSpot() {
   }
 
   currentSpot                 = randomSpot
-  playerGuessCoords           = null
-  solutionCoords              = null
+  playerGuessCoordinates      = null
+  solutionCoordinates         = null
   spotImageElement.src        = randomSpot.image
   spotViewerImage.src         = randomSpot.image
   spotPanel.hidden            = false
-  btnGuess.disabled           = true
-  btnGuess.textContent        = 'Guess'
+  guessButton.disabled        = true
+  guessButton.textContent     = 'Guess'
   displayDistance.textContent = '0'
   displayPoints.textContent   = `${totalScore}`
 
@@ -146,40 +135,38 @@ function selectRandomSpot() {
 }
 
 function handleGuessSubmission() {
-  if (solutionCoords) {
+  if (solutionCoordinates) {
     selectRandomSpot()
     return
   }
 
-  const answerCoordinates = currentSpot?.coords ?? playerGuessCoords
-  if (!answerCoordinates || !playerGuessCoords || !activeMap) return
+  if (!currentSpot || !playerGuessCoordinates || !activeMap) return
 
-  const answerMap      = currentSpot ? mapLoaderInstance.getMapByIdentifier(currentSpot.mapId) : activeMap
-  const isDifferentMap = Boolean(answerMap && answerMap.identifier !== activeMap.identifier)
-  const guessLocation  = playerGuessCoords
-  const previousBounds = mapRendererInstance.landBounds
+  const answerCoordinates = currentSpot.coords
+  const answerMap         = mapLoaderInstance.getMapByIdentifier(currentSpot.mapId)
+  const isDifferentMap    = Boolean(answerMap && answerMap.identifier !== activeMap.identifier)
+  const previousBounds    = mapRendererInstance.landBounds
 
   if (isDifferentMap) {
     activeMap                = answerMap
     mapSelectorElement.value = answerMap.identifier
     mapRendererInstance.displayMap(answerMap)
 
-    const newBounds   = mapRendererInstance.landBounds
-    playerGuessCoords = {
-      x: (guessLocation.x * newBounds.width)  / previousBounds.width,
-      y: (guessLocation.y * newBounds.height) / previousBounds.height,
+    const newBounds        = mapRendererInstance.landBounds
+    playerGuessCoordinates = {
+      x: (playerGuessCoordinates.x * newBounds.width)  / previousBounds.width,
+      y: (playerGuessCoordinates.y * newBounds.height) / previousBounds.height,
     }
   }
 
-  const currentBounds         = mapRendererInstance.landBounds
-  const evaluation            = evaluateGuess(answerCoordinates, playerGuessCoords, { width: currentBounds.width, height: currentBounds.height })
+  const evaluation            = evaluateGuess(answerCoordinates, playerGuessCoordinates, mapRendererInstance.landBounds)
   const roundScore            = isDifferentMap ? 0 : evaluation.score
 
-  solutionCoords              = answerCoordinates
+  solutionCoordinates         = answerCoordinates
   totalScore                 += roundScore
-  btnGuess.textContent        = 'Next'
-  btnGuess.disabled           = false
-  displayDistance.textContent = `${(evaluation.distance ?? evaluation.normalizedDistance * 100).toFixed(1)} px`
+  guessButton.textContent     = 'Next'
+  guessButton.disabled        = false
+  displayDistance.textContent = `${evaluation.distance.toFixed(1)} px`
   displayPoints.textContent   = `${totalScore}`
 
   mapRendererInstance.requestRender()
@@ -190,8 +177,7 @@ mapSelectorElement.innerHTML = mapLoaderInstance.allMaps
   .join('')
 
 mapSelectorElement.addEventListener('change', (event) => {
-  selectMap(mapLoaderInstance.getMapByIdentifier(Number(event.target.value)))
-  selectRandomSpot()
+  selectMap(mapLoaderInstance.getMapByIdentifier(event.target.value))
 })
 
 canvasViewport.addEventListener('pointerdown', (event) => {
@@ -199,43 +185,39 @@ canvasViewport.addEventListener('pointerdown', (event) => {
 })
 
 canvasViewport.addEventListener('pointerup', (event) => {
-  if (!pointerDownOrigin || !currentSpot || solutionCoords || !activeMap) return
+  if (!pointerDownOrigin || !currentSpot || solutionCoordinates || !activeMap) return
 
-  const hasDragged = Math.hypot(event.clientX - pointerDownOrigin.x, event.clientY - pointerDownOrigin.y) > 5
+  const deltaX      = event.clientX - pointerDownOrigin.x
+  const deltaY      = event.clientY - pointerDownOrigin.y
   pointerDownOrigin = null
 
-  if (hasDragged) return
+  if ((deltaX * deltaX + deltaY * deltaY) > 25) return
 
   const clickedCoordinates = mapRendererInstance.screenToMapCoordinates(event.clientX, event.clientY, true)
-
   if (!isValidLandmassClick(clickedCoordinates, event.clientX, event.clientY)) {
-    playerGuessCoords = null
-    btnGuess.disabled = true
+    playerGuessCoordinates = null
+    guessButton.disabled   = true
     mapRendererInstance.requestRender()
     return
   }
 
-  playerGuessCoords = clickedCoordinates
-  btnGuess.disabled = false
+  playerGuessCoordinates = clickedCoordinates
+  guessButton.disabled   = false
   mapRendererInstance.requestRender()
 })
 
-btnGuess.addEventListener('click', handleGuessSubmission)
+guessButton.addEventListener('click', handleGuessSubmission)
 
 spotImageElement.addEventListener('click', () => {
   spotViewer.hidden = false
 })
 
 spotViewer.addEventListener('click', (event) => {
-  if (event.target === spotViewer) {
-    spotViewer.hidden = true
-  }
+  if (event.target === spotViewer) spotViewer.hidden = true
 })
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    spotViewer.hidden = true
-  }
+  if (event.key === 'Escape') spotViewer.hidden = true
 })
 
 if (mapLoaderInstance.defaultMap) {

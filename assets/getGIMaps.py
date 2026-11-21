@@ -2,6 +2,7 @@
 python -m venv .venv
 source .venv/bin/activate.fish # Omit fish if using bash/sh etc
 pip install -r requirements.txt
+
 # python getGIMaps.py      # Fetch all maps
 # python getGIMaps.py 2 40 # Fetch maps by ID's
 """
@@ -38,29 +39,23 @@ resolutions = (
   ("N4", 4096),
 )
 
-# Spacer color thresholds --- WILL HAVE ISSUES
+# Spacer color thresholds --- WILL MAKE ISSUES
 maxRed   = 32
 maxGreen = 53
 maxBlue  = 74
 
 session = requests.Session()
-adapter = requests.adapters.HTTPAdapter(
-  pool_connections = 64,
-  pool_maxsize     = 64,
-  max_retries      = 3,
-)
+adapter = requests.adapters.HTTPAdapter(pool_connections = 64, pool_maxsize = 64, max_retries = 3)
 session.mount("https://", adapter)
 session.mount("http://",  adapter)
 
 def sanitizeFilename(name):
-  """Removes invalid filesystem characters"""
   return re.sub(r'[\\/*?:"<>|]', "", name).strip().replace(" ", "_")
 
 def buildTileUrl(mapId, version, column, row, resolutionId):
   return f"{tileCdn}/{mapId}/{version}/{column}_{row}_{resolutionId}.webp"
 
 def fetchMapInfo(mapId):
-  """Queries the HoYoLAB API for map dimensions and asset version"""
   try:
     response = session.get(
       f"{apiBase}/info",
@@ -95,69 +90,75 @@ def tileExists(url):
     return False
 
 def getBestResolution(mapInfo):
-  """Finds the highest quality resolution that has tiles on the CDN"""
-  for resolutionId, step in resolutions:
-    lastColumn = math.ceil(mapInfo["width"]  / step) - 1
-    lastRow    = math.ceil(mapInfo["height"] / step) - 1
+  """Probes CDN with multi-point sampling to find highest resolution"""
+  mapId, version = mapInfo["id"], mapInfo["version"]
 
-    # Samples the centre tile and the origin tile
-    samples = ((lastColumn // 2, lastRow // 2), (0, 0))
-    if any(
-      tileExists(buildTileUrl(mapInfo["id"], mapInfo["version"], column, row, resolutionId))
-      for column, row in samples
-    ):
+  for resolutionId, step in resolutions:
+    totalColumns = math.ceil(mapInfo["width"]  / step)
+    totalRows    = math.ceil(mapInfo["height"] / step)
+
+    samples = (
+      ( totalColumns      // 2,  totalRows      // 2),
+      ( totalColumns      // 3,  totalRows      // 3),
+      ((totalColumns * 2) // 3, (totalRows * 2) // 3),
+      ( totalColumns      // 2,  totalRows      // 3),
+      ( totalColumns      // 3,  totalRows      // 2),
+    )
+
+    if any(tileExists(buildTileUrl(mapId, version, column, row, resolutionId)) for column, row in samples if column < totalColumns and row < totalRows):
       return resolutionId, step
+
   return None
 
-def applyTransparencyFilter(image):
-  """Turns spacer tiles and colors transparent"""
-  pixels           = np.array(image.convert("RGBA"))
-  red, green, blue = (pixels[:, :, channel].astype(np.int16) for channel in range(3))
+def applyTransparencyFilter(rawImageBytes):
+  """Filters spacer tiles"""
+  image  = Image.open(io.BytesIO(rawImageBytes)).convert("RGBA")
+  pixels = np.array(image)
+
+  red   = pixels[:, :, 0]
+  green = pixels[:, :, 1]
+  blue  = pixels[:, :, 2]
 
   isSpacer = (
     (red <= maxRed)
-    & (green    <= maxGreen)
-    & (blue     <= maxBlue)
-    & (blue     >= red   + 4)
-    & (blue * 4 >= green * 3)
+    & (green <= maxGreen)
+    & (blue  <= maxBlue)
+    & (blue  >= red + 4)
+    & (blue.astype(np.int16) * 4 >= green.astype(np.int16) * 3)
   )
 
-  pixels[:, :, 3][isSpacer] = 0
-  isFullySpacer = np.all(pixels[:, :, 3] == 0)
+  if np.all(isSpacer):
+    return None, True
 
-  return Image.fromarray(pixels, mode = "RGBA"), isFullySpacer
+  if not np.any(isSpacer):
+    return image, False
+
+  pixels[isSpacer, 3] = 0
+  return Image.fromarray(pixels, mode = "RGBA"), False
 
 def downloadAndSaveTile(context, coordinate):
-  """Downloads, filters, and writes an individual tile to disk if not empty"""
-  mapId, version, resolutionId, targetFolder = context
-  row, column                                = coordinate
-
-  # 1-indexed naming: Column x Row (e.g. 1x1.png, 1x2.png ... 99x78.png)
-  coordinateKey = f"{column + 1}x{row + 1}"
-  tileFilename  = f"{coordinateKey}.png"
-  tileFilePath  = os.path.join(targetFolder, tileFilename)
+  mapId, version, resolutionId, stagingFolder = context
+  row, column                                 = coordinate
+  coordinateKey                               = f"{column + 1}x{row + 1}"
+  tileFilePath                                = os.path.join(stagingFolder, f"{coordinateKey}.png")
 
   try:
-    response = session.get(
-      buildTileUrl(mapId, version, column, row, resolutionId),
-      timeout = 15,
-    )
+    response = session.get(buildTileUrl(mapId, version, column, row, resolutionId), timeout = 15)
+    if response.status_code in (403, 404):
+      return coordinateKey, "missing"
     response.raise_for_status()
 
-    tileImage, isEmpty = applyTransparencyFilter(Image.open(io.BytesIO(response.content)))
-
+    tileImage, isEmpty = applyTransparencyFilter(response.content)
     if isEmpty:
       return coordinateKey, "empty"
 
-    # Save as RGBA PNG
     tileImage.save(tileFilePath, format = "PNG", compress_level = 0)
     return coordinateKey, "saved"
 
   except (requests.RequestException, OSError):
-    return coordinateKey, "failed"
+    return coordinateKey, "error"
 
 def exportMap(mapInfo):
-  """Downloads every tile and saves them directly into a tile folder"""
   resolution = getBestResolution(mapInfo)
   if not resolution:
     print(f"[-] No valid tiles found for {mapInfo['name']}")
@@ -168,11 +169,13 @@ def exportMap(mapInfo):
   totalRows          = math.ceil(mapInfo["height"] / step)
   totalTiles         = totalColumns * totalRows
 
-  folderName   = f"{mapInfo['id']}_{sanitizeFilename(mapInfo['name'])}_{resolutionId}"
-  targetFolder = os.path.join(outputDirectory, folderName)
-  tempFolder   = os.path.join(targetFolder, ".temp")
-  shutil.rmtree(tempFolder, ignore_errors = True)
-  os.makedirs(tempFolder, exist_ok = True)
+  folderName    = f"{mapInfo['id']}_{sanitizeFilename(mapInfo['name'])}_{resolutionId}"
+  targetFolder  = os.path.join(outputDirectory, folderName)
+  stagingFolder = f"{targetFolder}.tmp"
+  backupFolder  = f"{targetFolder}.bak"
+
+  shutil.rmtree(stagingFolder, ignore_errors = True)
+  os.makedirs(stagingFolder, exist_ok = True)
 
   print(
     f"\n[+] Exporting: {mapInfo['name']} (ID: {mapInfo['id']}) | Res: {resolutionId}"
@@ -180,73 +183,69 @@ def exportMap(mapInfo):
   )
 
   coordinates = itertools.product(range(totalRows), range(totalColumns))
-  context     = (mapInfo["id"], mapInfo["version"], resolutionId, tempFolder)
+  context     = (mapInfo["id"], mapInfo["version"], resolutionId, stagingFolder)
   workerTask  = partial(downloadAndSaveTile, context)
 
   savedCount   = 0
   emptyCount   = 0
-  failedCount  = 0
+  missingCount = 0
+  errorCount   = 0
   omittedTiles = []
 
-  with ThreadPoolExecutor(max_workers = workerCount) as executor:
-    for count, (coordinateKey, status) in enumerate(executor.map(workerTask, coordinates), 1):
-      if status == "saved":
-        savedCount += 1
-      elif status == "empty":
-        emptyCount += 1
-        omittedTiles.append(coordinateKey)
-      else:
-        failedCount += 1
-        omittedTiles.append(coordinateKey)
+  try:
+    with ThreadPoolExecutor(max_workers = workerCount) as executor:
+      for count, (coordinateKey, status) in enumerate(executor.map(workerTask, coordinates), 1):
+        if status == "saved":
+          savedCount += 1
+        elif status == "error":
+          errorCount += 1
+        else:
+          omittedTiles.append(coordinateKey)
+          if status == "empty":
+            emptyCount += 1
+          else:
+            missingCount += 1
 
-      if count % 100 == 0 or count == totalTiles:
-        print(
-          f"    Progress: {count}/{totalTiles} tiles "
-          f"| Saved: {savedCount} | Skipped Spacers: {emptyCount}",
-          end = "\r"
-        )
+        if count % 100 == 0 or count == totalTiles:
+          print(f"    Progress: {count}/{totalTiles} tiles | Saved: {savedCount} | Skipped: {emptyCount}", end = "\r")
 
-  # Swap temp folder tiles into the target folder
-  for filename in os.listdir(targetFolder):
-    if filename.endswith(".png"):
-      os.remove(os.path.join(targetFolder, filename))
+    if errorCount > 0 or savedCount == 0:
+      print(f"\n[!] Aborting {mapInfo['name']}: {errorCount} download error(s), {savedCount} saved. Existing files preserved.")
+      return None
 
-  for filename in os.listdir(tempFolder):
-    os.replace(os.path.join(tempFolder, filename), os.path.join(targetFolder, filename))
-  shutil.rmtree(tempFolder, ignore_errors = True)
+    with open(os.path.join(stagingFolder, "metadata.json"), "w", encoding = "utf-8") as file:
+      json.dump({
+        "mapId":        mapInfo["id"],
+        "name":         mapInfo["name"],
+        "resolution":   resolutionId,
+        "tileSize":     tileSize,
+        "totalColumns": totalColumns,
+        "totalRows":    totalRows,
+        "totalWidth":   totalColumns * tileSize,
+        "totalHeight":  totalRows    * tileSize,
+        "naming":       "{column}x{row}.png",
+        "indexing":     "1-based",
+        "omittedTiles": omittedTiles,
+      }, file, indent = 2)
 
-  # Write metadata descriptor
-  metadataPath = os.path.join(targetFolder, "metadata.json")
-  with open(metadataPath, "w", encoding = "utf-8") as file:
-    json.dump({
-      "mapId":        mapInfo["id"],
-      "name":         mapInfo["name"],
-      "resolution":   resolutionId,
-      "tileSize":     tileSize,
-      "totalColumns": totalColumns,
-      "totalRows":    totalRows,
-      "totalWidth":   totalColumns * tileSize,
-      "totalHeight":  totalRows    * tileSize,
-      "naming":       "{column}x{row}.png",
-      "indexing":     "1-based",
-      "omittedTiles": omittedTiles,
-    }, file, indent = 2)
+    shutil.rmtree(backupFolder, ignore_errors = True)
+    if os.path.exists(targetFolder):
+      os.replace(targetFolder, backupFolder)
+    os.replace(stagingFolder, targetFolder)
+    shutil.rmtree(backupFolder, ignore_errors = True)
 
-  print(
-    f"\n[✓] Finished {mapInfo['name']}: "
-    f"{savedCount} tiles saved, {emptyCount} empty tiles skipped, {failedCount} missing."
-  )
-
-  return {
-    "mapId":      mapInfo["id"],
-    "name":       mapInfo["name"],
-    "resolution": resolutionId,
-    "folderName": folderName,
-    "metadata":   f"./{folderName}/metadata.json",
-  }
+    print(f"\n[✓] Finished {mapInfo['name']}: {savedCount} saved, {emptyCount} empty, {missingCount} missing.")
+    return {
+      "mapId":      mapInfo["id"],
+      "name":       mapInfo["name"],
+      "resolution": resolutionId,
+      "folderName": folderName,
+      "metadata":   f"./{folderName}/metadata.json",
+    }
+  finally:
+    shutil.rmtree(stagingFolder, ignore_errors = True)
 
 def discoverMaps(mapIds):
-  """Probes specified or all map IDs up to the ceiling in parallel"""
   print("[*] Scanning for available maps...")
   with ThreadPoolExecutor(max_workers = workerCount) as executor:
     discovered = [info for info in executor.map(fetchMapInfo, mapIds) if info]
@@ -257,19 +256,18 @@ def discoverMaps(mapIds):
   return discovered
 
 def updateIndex(newMaps):
-  """Updates index.json of previously exported maps"""
+  if not newMaps:
+    return
+
   indexPath = os.path.join(outputDirectory, "index.json")
   maps      = {}
 
   if os.path.exists(indexPath):
-    try:
-      with open(indexPath, "r", encoding = "utf-8") as file:
-        maps = {m["mapId"]: m for m in json.load(file).get("maps", []) if "mapId" in m}
-    except (json.JSONDecodeError, OSError):
-      pass
+    with open(indexPath, "r", encoding = "utf-8") as file:
+      maps = {mapEntry["mapId"]: mapEntry for mapEntry in json.load(file).get("maps", []) if "mapId" in mapEntry}
 
-  maps.update({m["mapId"]: m for m in newMaps})
-  merged = sorted(maps.values(), key = lambda m: m["mapId"])
+  maps.update({mapEntry["mapId"]: mapEntry for mapEntry in newMaps})
+  merged = sorted(maps.values(), key = lambda mapEntry: mapEntry["mapId"])
 
   with open(indexPath, "w", encoding = "utf-8") as file:
     json.dump({"totalMaps": len(merged), "maps": merged}, file, indent = 2)

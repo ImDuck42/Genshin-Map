@@ -1,0 +1,42 @@
+name: 📍 Submit New Spot
+description: Submit a screenshot and coordinates for a new map spot
+title: "[New Spot]: "
+labels: ["new-spot"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for submitting a new location!
+
+  - type: input
+    id: map_id
+    attributes:
+      label: Map ID
+      description: The ID of the map (e.g. 2 for Teyvat, 7 for Enkanomiya)
+      placeholder: "2"
+    validations:
+      required: true
+
+  - type: input
+    id: coord_x
+    attributes:
+      label: Coordinate X
+      placeholder: "4520"
+    validations:
+      required: true
+
+  - type: input
+    id: coord_y
+    attributes:
+      label: Coordinate Y
+      placeholder: "3180"
+    validations:
+      required: true
+
+  - type: textarea
+    id: image
+    attributes:
+      label: Screenshot
+      description: Drag & drop or paste your screenshot here
+    validations:
+      required: true
