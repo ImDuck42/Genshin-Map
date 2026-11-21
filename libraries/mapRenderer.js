@@ -1,7 +1,7 @@
 export class MapRenderer {
   constructor(canvasTarget, initialMap = null) {
     this.canvasElement            = typeof canvasTarget === 'string' ? document.querySelector(canvasTarget) : canvasTarget
-    this.renderingContext         = this.canvasElement.getContext('2d', { alpha: true })
+    this.renderingContext         = this.canvasElement.getContext('2d', { alpha: true, willReadFrequently: true })
 
     this.activeMap                = initialMap
     this.tileCache                = new Map()
