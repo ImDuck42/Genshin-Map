@@ -1,0 +1,17 @@
+{
+  "mapId": 37,
+  "name": "Temple of Space",
+  "resolution": "P0",
+  "tileSize": 256,
+  "totalColumns": 12,
+  "totalRows": 12,
+  "totalWidth": 3072,
+  "totalHeight": 3072,
+  "naming": "{column}x{row}.png",
+  "indexing": "1-based",
+  "omittedTiles": [
+    "3x3",
+    "9x10",
+    "10x10"
+  ]
+}
