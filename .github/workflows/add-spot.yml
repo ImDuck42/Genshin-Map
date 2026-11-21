@@ -31,6 +31,10 @@ jobs:
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
+          if [ ! -f assets/genshin_spots/index.json ]; then
+            mkdir -p assets/genshin_spots/spot_images
+            printf '{\n  "spotLocation": "spot_images",\n  "spots": []\n}\n' > assets/genshin_spots/index.json
+          fi
           python assets/addSpot.py
 
       - name: Commit and Push
