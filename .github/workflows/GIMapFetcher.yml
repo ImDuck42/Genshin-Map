@@ -42,7 +42,7 @@ jobs:
           git config http.lowSpeedTime 999999
 
           if [ -f assets/genshin_maps/index.json ]; then
-            git add assets/genshin_maps/index.json
+            git add -f assets/genshin_maps/index.json
             if ! git diff --staged --quiet; then
               git commit -m "Update map index [skip ci]"
               git push origin HEAD
@@ -54,7 +54,7 @@ jobs:
               map_name=$(basename "$folder")
               echo "Processing $map_name..."
 
-              git add "$folder"
+              git add -f "$folder"
 
               if ! git diff --staged --quiet; then
                 git commit -m "Update tiles for $map_name [skip ci]"
